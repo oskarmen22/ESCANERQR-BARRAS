@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Lector QR y Barras</title>
+    <!-- Tailwind CSS para diseño rápido y responsivo -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Librería para iconos -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Librería HTML5-QRCode para el escaneo -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+
+    <style>
+        /* Estilos personalizados para animaciones y el lector */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f3f4f6;
+            padding-bottom: 80px; /* Espacio para el menú inferior */
+        }
+        
+        #reader {
+            width: 100%;
+            border-radius: 12px;
+            overflow: hidden;
+            background-color: black;
+        }
+
+        /* Ocultar elementos innecesarios de la librería para que se vea más limpio */
+        #reader__dashboard_section_csr span { display: none; }
+        
+        .scan-item {
+            transition: all 0.3s ease;
+        }
+        .scan-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Animación de pulso cuando se escanea */
+        @keyframes scan-pulse {
+            0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+        }
+        .scan-success {
+            animation: scan-pulse 0.5s;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Encabezado -->
+    <header class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-50">
+        <div class="flex justify-between items-center max-w-md mx-auto">
+            <h1 class="text-xl font-bold"><i class="fa-solid fa-barcode mr-2"></i>Scanner App</h1>
+            <button onclick="borrarHistorial()" class="text-xs bg-blue-700 px-3 py-1 rounded hover:bg-blue-800 transition">
+                <i class="fa-solid fa-trash"></i> Limpiar
+            </button>
+        </div>
+    </header>
+
+    <!-- Contenedor Principal -->
+    <main class="max-w-md mx-auto p-4 relative">
+        
+        <!-- VISTA 1: REGISTRO (Historial) -->
+        <div id="view-registro" class="block">
+            <h2 class="text-gray-700 text-lg font-semibold mb-3">Registro de Lecturas</h2>
+            
+            <!-- Lista vacía placeholder -->
+            <div id="empty-state" class="hidden flex flex-col items-center justify-center py-10 text-gray-400">
+                <i class="fa-solid fa-clipboard-list text-6xl mb-4"></i>
+                <p>No hay códigos escaneados aún.</p>
+                <p class="text-sm">Ve a la pestaña Escáner para comenzar.</p>
+            </div>
+
+            <!-- Lista de códigos -->
+            <ul id="lista-codigos" class="space-y-3">
+                <!-- Los items se generarán aquí con JS -->
+            </ul>
+        </div>
+
+        <!-- VISTA 2: ESCÁNER (Cámara) -->
+        <div id="view-escaner" class="hidden">
+            <div class="bg-white p-4 rounded-xl shadow-md mb-4 text-center">
+                <h2 class="text-gray-700 font-bold mb-2">Escaneando...</h2>
+                <p class="text-sm text-gray-500 mb-4">Apunta la cámara al código QR o de Barras</p>
+                
+                <!-- Área de la cámara -->
+                <div id="reader"></div>
+                
+                <div id="last-result" class="mt-4 p-3 bg-green-100 text-green-800 rounded hidden">
+                    <p class="font-bold text-xs uppercase">Último escaneo:</p>
+                    <p id="scanned-text" class="font-mono text-lg truncate">...</p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Menú de Navegación Inferior -->
+    <nav class="fixed bottom-0 left-0 w-full bg-white border-t border-gray-200 shadow-lg z-50">
+        <div class="flex justify-around items-center max-w-md mx-auto h-16">
+            <button onclick="cambiarVista('registro')" id="btn-registro" class="flex-1 flex flex-col items-center justify-center text-blue-600 h-full transition active:bg-gray-100">
+                <i class="fa-solid fa-list text-xl mb-1"></i>
+                <span class="text-xs font-medium">Registro</span>
+            </button>
+            
+            <!-- Botón central grande para escanear -->
+            <div class="relative -top-5">
+                <button onclick="cambiarVista('escaner')" class="bg-blue-600 hover:bg-blue-700 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg transform transition active:scale-95 border-4 border-white">
+                    <i class="fa-solid fa-qrcode text-2xl"></i>
+                </button>
+            </div>
+
+            <button onclick="cambiarVista('escaner')" id="btn-escaner" class="flex-1 flex flex-col items-center justify-center text-gray-400 h-full transition active:bg-gray-100">
+                <i class="fa-solid fa-camera text-xl mb-1"></i>
+                <span class="text-xs font-medium">Escáner</span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Sonido de beep -->
+    <audio id="beep-sound" src="https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3" preload="auto"></audio>
+
+    <script>
+        // --- Variables Globales ---
+        let html5QrcodeScanner = null;
+        let historialCodigos = [];
+        const listaEl = document.getElementById('lista-codigos');
+        const emptyStateEl = document.getElementById('empty-state');
+        const beepSound = document.getElementById('beep-sound');
+
+        // --- Inicialización ---
+        document.addEventListener('DOMContentLoaded', () => {
+            cargarHistorial();
+            renderizarHistorial();
+        });
+
+        // --- Lógica del Historial ---
+        function cargarHistorial() {
+            const guardado = localStorage.getItem('qr_historial');
+            if (guardado) {
+                historialCodigos = JSON.parse(guardado);
+            }
+        }
+
+        function guardarHistorial() {
+            localStorage.setItem('qr_historial', JSON.stringify(historialCodigos));
+            renderizarHistorial();
+        }
+
+        function agregarCodigo(texto, formato) {
+            const fecha = new Date();
+            const nuevoItem = {
+                id: Date.now(),
+                texto: texto,
+                formato: formato,
+                fecha: fecha.toLocaleDateString() + ' ' + fecha.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            };
+            
+            // Añadir al principio del array
+            historialCodigos.unshift(nuevoItem);
+            guardarHistorial();
+        }
+
+        function borrarHistorial() {
+            if(confirm('¿Estás seguro de borrar todo el historial?')) {
+                historialCodigos = [];
+                guardarHistorial();
+            }
+        }
+
+        function copiarTexto(texto) {
+            navigator.clipboard.writeText(texto).then(() => {
+                alert('¡Código copiado al portapapeles!');
+            }).catch(err => {
+                console.error('Error al copiar', err);
+            });
+        }
+
+        function renderizarHistorial() {
+            listaEl.innerHTML = '';
+
+            if (historialCodigos.length === 0) {
+                emptyStateEl.classList.remove('hidden');
+            } else {
+                emptyStateEl.classList.add('hidden');
+                
+                historialCodigos.forEach(item => {
+                    const li = document.createElement('li');
+                    li.className = 'scan-item bg-white p-4 rounded-lg shadow border-l-4 border-blue-500 flex justify-between items-center';
+                    li.innerHTML = `
+                        <div class="overflow-hidden">
+                            <p class="font-bold text-gray-800 break-all">${item.texto}</p>
+                            <div class="flex items-center text-xs text-gray-500 mt-1">
+                                <span class="bg-gray-200 px-2 py-0.5 rounded mr-2 text-gray-700">${item.formato}</span>
+                                <span><i class="fa-regular fa-clock"></i> ${item.fecha}</span>
+                            </div>
+                        </div>
+                        <button onclick="copiarTexto('${item.texto}')" class="ml-3 text-gray-400 hover:text-blue-600 p-2">
+                            <i class="fa-regular fa-copy text-lg"></i>
+                        </button>
+                    `;
+                    listaEl.appendChild(li);
+                });
+            }
+        }
+
+        // --- Lógica de Navegación y Cámara ---
+
+        function cambiarVista(vista) {
+            const viewRegistro = document.getElementById('view-registro');
+            const viewEscaner = document.getElementById('view-escaner');
+            const btnRegistro = document.getElementById('btn-registro');
+            const btnEscaner = document.getElementById('btn-escaner');
+
+            if (vista === 'registro') {
+                viewRegistro.classList.remove('hidden');
+                viewEscaner.classList.add('hidden');
+                
+                // Estilos botones
+                btnRegistro.classList.remove('text-gray-400');
+                btnRegistro.classList.add('text-blue-600');
+                btnEscaner.classList.add('text-gray-400');
+                btnEscaner.classList.remove('text-blue-600');
+
+                detenerCamara(); // Ahorrar batería
+            } else {
+                viewRegistro.classList.add('hidden');
+                viewEscaner.classList.remove('hidden');
+
+                // Estilos botones
+                btnRegistro.classList.add('text-gray-400');
+                btnRegistro.classList.remove('text-blue-600');
+                btnEscaner.classList.remove('text-gray-400');
+                btnEscaner.classList.add('text-blue-600');
+
+                iniciarCamara();
+            }
+        }
+
+        // --- Lógica del Escáner (Html5Qrcode) ---
+
+        function iniciarCamara() {
+            // Si ya existe una instancia, no crear otra
+            if (html5QrcodeScanner) return;
+
+            // Configuración del escáner
+            const config = { 
+                fps: 10, 
+                qrbox: { width: 250, height: 250 },
+                aspectRatio: 1.0
+            };
+            
+            // Crear instancia (usamos la versión Scanner que incluye UI básica para seleccionar cámara)
+            html5QrcodeScanner = new Html5QrcodeScanner("reader", config, /* verbose= */ false);
+            
+            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+        }
+
+        function detenerCamara() {
+            if (html5QrcodeScanner) {
+                try {
+                    html5QrcodeScanner.clear().then(() => {
+                        html5QrcodeScanner = null;
+                        document.getElementById('reader').innerHTML = ""; // Limpiar el DOM
+                    }).catch(error => {
+                        console.error("Error al detener cámara", error);
+                    });
+                } catch (e) {
+                    console.log("Scanner no estaba corriendo");
+                }
+            }
+        }
+
+        function onScanSuccess(decodedText, decodedResult) {
+            // Reproducir sonido
+            beepSound.play().catch(e => console.log("Audio play failed interaction needed"));
+
+            // Mostrar resultado en pantalla momentáneamente
+            const resultBox = document.getElementById('last-result');
+            const textSpan = document.getElementById('scanned-text');
+            
+            resultBox.classList.remove('hidden');
+            resultBox.classList.add('scan-success');
+            textSpan.textContent = decodedText;
+
+            // Evitar duplicados inmediatos (opcional, aquí permitimos todo)
+            // Agregar al registro
+            let formato = decodedResult?.result?.format?.formatName || "DETECTADO";
+            agregarCodigo(decodedText, formato);
+
+            // Pausar brevemente para evitar leer el mismo código 50 veces en un segundo
+            html5QrcodeScanner.pause(true);
+            setTimeout(() => {
+                html5QrcodeScanner.resume();
+                resultBox.classList.remove('scan-success');
+            }, 1500);
+        }
+
+        function onScanFailure(error) {
+            // Esto se ejecuta muy frecuentemente cuando no detecta nada,
+            // mejor no hacer nada aquí para no saturar la consola.
+        }
+
+    </script>
+</body>
+</html>
