@@ -28,6 +28,7 @@
             border-radius: 12px;
             overflow: hidden;
             background-color: #e5e7eb;
+            cursor: pointer; /* Indicar que es interactivo */
         }
 
         #reader {
@@ -121,14 +122,15 @@
                 <p class="text-sm text-gray-500 mb-4">Mantén presionado el recuadro para escanear</p>
                 
                 <!-- Área de la cámara con Overlay de Control -->
-                <div id="reader-container">
+                <!-- Agregamos evento onclick para reactivar si está apagada -->
+                <div id="reader-container" onclick="reactivarCamaraSiEsNecesario()">
                     <div id="reader" class="flex flex-col items-center justify-center text-gray-400">
                         <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
-                        <p class="text-sm px-4">Cámara inactiva</p>
+                        <p class="text-sm px-4">Toca para activar la cámara</p>
                     </div>
 
                     <!-- Botón de Flash (Flotante) -->
-                    <button id="btn-flash" onclick="toggleFlash()" class="absolute top-4 right-4 bg-black/50 text-white w-10 h-10 rounded-full hover:bg-black/70 hidden z-30 backdrop-blur-sm flex items-center justify-center transition-all">
+                    <button id="btn-flash" onclick="event.stopPropagation(); toggleFlash()" class="absolute top-4 right-4 bg-black/50 text-white w-10 h-10 rounded-full hover:bg-black/70 hidden z-30 backdrop-blur-sm flex items-center justify-center transition-all">
                         <i class="fa-solid fa-bolt text-lg"></i>
                     </button>
                     
@@ -140,16 +142,6 @@
                     </div>
                 </div>
 
-                <!-- Botones de control manual -->
-                <div class="mt-4 flex gap-2 justify-center">
-                    <button id="btn-start-cam" onclick="iniciarCamara()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow hover:bg-blue-700">
-                        <i class="fa-solid fa-camera mr-1"></i> Activar Cámara
-                    </button>
-                    <button id="btn-stop-cam" onclick="detenerCamara()" class="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow hover:bg-red-600 hidden">
-                        <i class="fa-solid fa-stop mr-1"></i> Detener
-                    </button>
-                </div>
-                
                 <div id="last-result" class="mt-4 p-3 bg-green-100 text-green-800 rounded hidden">
                     <p class="font-bold text-xs uppercase">Último escaneo:</p>
                     <p id="scanned-text" class="font-mono text-lg truncate">...</p>
@@ -185,9 +177,6 @@
         </div>
     </nav>
 
-    <!-- Sonido de beep -->
-    <audio id="beep-sound" src="https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3" preload="auto"></audio>
-
     <script>
         // --- Variables Globales ---
         let html5QrCode = null;
@@ -198,10 +187,13 @@
         let hasScannedThisPress = false;
         let isFlashOn = false;
 
+        // Variables para temporizador de inactividad
+        let inactivityTimeout = null;
+        const INACTIVITY_LIMIT_MS = 60000; // 1 minuto
+
         // Elementos DOM
         const listaEl = document.getElementById('lista-codigos');
         const emptyStateEl = document.getElementById('empty-state');
-        const beepSound = document.getElementById('beep-sound');
         const errorEl = document.getElementById('error-message');
         const controlLayer = document.getElementById('scan-control-layer');
         const scanInstruction = document.getElementById('scan-instruction');
@@ -213,6 +205,46 @@
             renderizarHistorial();
             setupTouchEvents(); // Configurar eventos de toque
         });
+
+        // --- Sistema de Audio y Vibración ---
+        function playBeep() {
+            // Vibrar más fuerte y duradero (500ms)
+            if (navigator.vibrate) {
+                navigator.vibrate(500);
+            }
+
+            // Generar sonido ESCANDALOSO usando AudioContext
+            try {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (AudioContext) {
+                    const ctx = new AudioContext();
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+
+                    // Onda cuadrada para sonido digital agresivo
+                    osc.type = 'square'; 
+                    // Frecuencia 1500Hz: Agudo pero con cuerpo
+                    osc.frequency.setValueAtTime(1500, ctx.currentTime);
+                    
+                    // --- VOLUMEN Y DURACIÓN (BIIIIIIIP) ---
+                    // Empezamos FUERTE (0.3 es bastante alto para square wave)
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    // Mantenemos el volumen alto casi todo el tiempo
+                    gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.6);
+                    // Bajada rápida al final
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.8);
+
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+
+                    osc.start();
+                    // Dura 0.8 segundos en total (mucho más largo que antes)
+                    osc.stop(ctx.currentTime + 0.8); 
+                }
+            } catch (e) {
+                console.error("Audio error", e);
+            }
+        }
 
         // --- Configuración de Eventos de Toque/Click ---
         function setupTouchEvents() {
@@ -236,6 +268,8 @@
         function startPress() {
             if (!html5QrCode) return; // Solo si la cámara está activa
             
+            resetInactivityTimer(); // Reiniciar temporizador al interactuar
+
             isUserPressing = true;
             hasScannedThisPress = false; // Resetear el bloqueo de esta sesión de presión
             
@@ -250,6 +284,8 @@
         function endPress() {
             isUserPressing = false;
             
+            resetInactivityTimer(); // Reiniciar temporizador al soltar
+
             // Feedback Visual
             controlLayer.classList.remove('is-pressing');
             
@@ -368,6 +404,31 @@
                 btnEscaner.classList.remove('text-gray-400');
                 btnEscaner.classList.add('text-blue-600');
 
+                // Iniciar cámara automáticamente al entrar a la vista
+                iniciarCamara();
+            }
+        }
+
+        // --- Gestión de Inactividad ---
+        
+        function resetInactivityTimer() {
+            // Limpiar timer anterior
+            if (inactivityTimeout) {
+                clearTimeout(inactivityTimeout);
+            }
+
+            // Solo poner timer si la cámara está activa
+            if (html5QrCode && html5QrCode.isScanning) {
+                inactivityTimeout = setTimeout(() => {
+                    console.log("Inactividad detectada. Apagando cámara.");
+                    detenerCamara(true); // true = apagado por inactividad
+                }, INACTIVITY_LIMIT_MS);
+            }
+        }
+
+        function reactivarCamaraSiEsNecesario() {
+            // Si la cámara NO está escaneando, intentar iniciarla
+            if (!html5QrCode || !html5QrCode.isScanning) {
                 iniciarCamara();
             }
         }
@@ -378,7 +439,10 @@
             errorEl.classList.add('hidden');
             
             if (html5QrCode) {
-                if (html5QrCode.isScanning) return;
+                if (html5QrCode.isScanning) {
+                    resetInactivityTimer(); // Si ya corre, solo reseteamos timer
+                    return;
+                }
             } else {
                 html5QrCode = new Html5Qrcode("reader");
             }
@@ -392,36 +456,41 @@
                 onScanSuccess, 
                 onScanFailure
             ).then(() => {
-                document.getElementById('btn-start-cam').classList.add('hidden');
-                document.getElementById('btn-stop-cam').classList.remove('hidden');
-                
                 // Mostrar la capa de control solo cuando la cámara arranca
                 controlLayer.classList.remove('hidden');
                 
                 // Verificar soporte de Flash
                 checkFlashCapability();
+                
+                // INICIAR TIMER DE INACTIVIDAD
+                resetInactivityTimer();
 
             }).catch(err => {
                 console.error("Error iniciando cámara", err);
-                document.getElementById('btn-start-cam').classList.remove('hidden');
-                document.getElementById('btn-stop-cam').classList.add('hidden');
                 mostrarError(err);
             });
         }
 
-        function detenerCamara() {
+        function detenerCamara(esPorInactividad = false) {
+            // Limpiar timer para evitar loops
+            if (inactivityTimeout) {
+                clearTimeout(inactivityTimeout);
+                inactivityTimeout = null;
+            }
+
             controlLayer.classList.add('hidden'); // Ocultar capa de control
             flashBtn.classList.add('hidden'); // Ocultar flash
             resetFlashIcon(); // Resetear icono
 
             if (html5QrCode && html5QrCode.isScanning) {
                 html5QrCode.stop().then(() => {
-                    document.getElementById('btn-start-cam').classList.remove('hidden');
-                    document.getElementById('btn-stop-cam').classList.add('hidden');
+                    let mensaje = esPorInactividad ? "Cámara pausada por inactividad" : "Cámara detenida";
+                    
                     document.getElementById('reader').innerHTML = `
                         <div class="flex flex-col items-center justify-center text-gray-400 pt-10">
-                            <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
-                            <p class="text-sm px-4">Cámara detenida</p>
+                            <i class="fa-solid fa-power-off text-4xl mb-2"></i>
+                            <p class="text-sm px-4 font-semibold">${mensaje}</p>
+                            <p class="text-xs px-4 mt-1 animate-pulse">Toca aquí para activar</p>
                         </div>
                     `;
                 }).catch(err => {
@@ -451,6 +520,9 @@
 
         function toggleFlash() {
             if (!html5QrCode) return;
+
+            // Al interactuar con el flash, también reiniciamos el timer de inactividad
+            resetInactivityTimer();
 
             isFlashOn = !isFlashOn;
 
@@ -499,6 +571,10 @@
         }
 
         function onScanSuccess(decodedText, decodedResult) {
+            
+            // Reiniciar timer en escaneo exitoso
+            resetInactivityTimer();
+
             // LÓGICA CLAVE: 
             // 1. Si el usuario NO está presionando, ignoramos el resultado.
             // 2. Si YA escaneamos algo en esta misma pulsación, ignoramos el resultado.
@@ -509,8 +585,8 @@
             // --- ÉXITO ---
             hasScannedThisPress = true; // Bloquear futuros escaneos hasta soltar dedo
 
-            // Reproducir sonido
-            beepSound.play().catch(e => console.log("Audio play failed interaction needed"));
+            // SONIDO Y VIBRACIÓN
+            playBeep();
 
             // Feedback Visual de Éxito Inmediato
             controlLayer.classList.add('scan-success');
