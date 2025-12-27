@@ -19,6 +19,7 @@
             padding-bottom: 80px; /* Espacio para el menú inferior */
             user-select: none; /* Evitar selección de texto al mantener pulsado */
             -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent; /* Quitar resaltado azul al tocar en móviles */
         }
         
         #reader-container {
@@ -122,8 +123,8 @@
                 <p class="text-sm text-gray-500 mb-4">Mantén presionado el recuadro para escanear</p>
                 
                 <!-- Área de la cámara con Overlay de Control -->
-                <!-- Agregamos evento onclick para reactivar si está apagada -->
-                <div id="reader-container" onclick="reactivarCamaraSiEsNecesario()">
+                <!-- MODIFICADO: onclick explícito en el contenedor para atrapar clicks perdidos -->
+                <div id="reader-container" onclick="iniciarCamara()">
                     <div id="reader" class="flex flex-col items-center justify-center text-gray-400">
                         <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
                         <p class="text-sm px-4">Toca para activar la cámara</p>
@@ -186,6 +187,7 @@
         let isUserPressing = false;
         let hasScannedThisPress = false;
         let isFlashOn = false;
+        let isCameraStarting = false; // Nueva bandera para evitar doble ejecución
 
         // Variables para temporizador de inactividad
         let inactivityTimeout = null;
@@ -426,24 +428,22 @@
             }
         }
 
-        function reactivarCamaraSiEsNecesario() {
-            // Si la cámara NO está escaneando, intentar iniciarla
-            if (!html5QrCode || !html5QrCode.isScanning) {
-                iniciarCamara();
-            }
-        }
-
         // --- Lógica del Escáner (Html5Qrcode Clase Base) ---
 
         function iniciarCamara() {
-            errorEl.classList.add('hidden');
+            // PROTECCIÓN: Si la cámara ya está arrancando, no hacer nada
+            if (isCameraStarting) return;
             
-            if (html5QrCode) {
-                if (html5QrCode.isScanning) {
-                    resetInactivityTimer(); // Si ya corre, solo reseteamos timer
-                    return;
-                }
-            } else {
+            // Si la cámara YA está escaneando, solo reseteamos el timer y salimos
+            if (html5QrCode && html5QrCode.isScanning) {
+                resetInactivityTimer();
+                return;
+            }
+
+            errorEl.classList.add('hidden');
+            isCameraStarting = true; // Marcar inicio
+            
+            if (!html5QrCode) {
                 html5QrCode = new Html5Qrcode("reader");
             }
 
@@ -456,6 +456,8 @@
                 onScanSuccess, 
                 onScanFailure
             ).then(() => {
+                isCameraStarting = false; // Desmarcar inicio
+                
                 // Mostrar la capa de control solo cuando la cámara arranca
                 controlLayer.classList.remove('hidden');
                 
@@ -466,6 +468,7 @@
                 resetInactivityTimer();
 
             }).catch(err => {
+                isCameraStarting = false; // Desmarcar inicio por error
                 console.error("Error iniciando cámara", err);
                 mostrarError(err);
             });
@@ -478,7 +481,8 @@
                 inactivityTimeout = null;
             }
 
-            controlLayer.classList.add('hidden'); // Ocultar capa de control
+            // Asegurarnos de que la capa de control esté oculta
+            controlLayer.classList.add('hidden'); 
             flashBtn.classList.add('hidden'); // Ocultar flash
             resetFlashIcon(); // Resetear icono
 
@@ -486,8 +490,9 @@
                 html5QrCode.stop().then(() => {
                     let mensaje = esPorInactividad ? "Cámara pausada por inactividad" : "Cámara detenida";
                     
+                    // MODIFICADO: Agregamos onclick directo al contenido y z-index alto para asegurar clickabilidad
                     document.getElementById('reader').innerHTML = `
-                        <div class="flex flex-col items-center justify-center text-gray-400 pt-10">
+                        <div onclick="iniciarCamara()" class="flex flex-col items-center justify-center text-gray-400 pt-10 w-full h-full cursor-pointer relative z-10">
                             <i class="fa-solid fa-power-off text-4xl mb-2"></i>
                             <p class="text-sm px-4 font-semibold">${mensaje}</p>
                             <p class="text-xs px-4 mt-1 animate-pulse">Toca aquí para activar</p>
