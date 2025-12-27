@@ -21,14 +21,18 @@
         
         #reader {
             width: 100%;
+            min-height: 300px;
             border-radius: 12px;
             overflow: hidden;
-            background-color: black;
+            background-color: #e5e7eb; /* Gris en lugar de negro para evitar confusión */
+            position: relative;
+        }
+        
+        #reader video {
+            object-fit: cover;
+            border-radius: 12px;
         }
 
-        /* Ocultar elementos innecesarios de la librería para que se vea más limpio */
-        #reader__dashboard_section_csr span { display: none; }
-        
         .scan-item {
             transition: all 0.3s ease;
         }
@@ -87,11 +91,28 @@
                 <p class="text-sm text-gray-500 mb-4">Apunta la cámara al código QR o de Barras</p>
                 
                 <!-- Área de la cámara -->
-                <div id="reader"></div>
+                <div id="reader" class="flex flex-col items-center justify-center text-gray-400">
+                    <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
+                    <p class="text-sm px-4">Cámara inactiva</p>
+                </div>
+
+                <!-- Botones de control manual -->
+                <div class="mt-4 flex gap-2 justify-center">
+                    <button id="btn-start-cam" onclick="iniciarCamara()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow hover:bg-blue-700">
+                        <i class="fa-solid fa-camera mr-1"></i> Activar Cámara
+                    </button>
+                    <button id="btn-stop-cam" onclick="detenerCamara()" class="bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-semibold shadow hover:bg-red-600 hidden">
+                        <i class="fa-solid fa-stop mr-1"></i> Detener
+                    </button>
+                </div>
                 
                 <div id="last-result" class="mt-4 p-3 bg-green-100 text-green-800 rounded hidden">
                     <p class="font-bold text-xs uppercase">Último escaneo:</p>
                     <p id="scanned-text" class="font-mono text-lg truncate">...</p>
+                </div>
+
+                <!-- Mensaje de error si falla -->
+                <div id="error-message" class="mt-4 p-3 bg-red-100 text-red-800 rounded hidden text-xs text-left">
                 </div>
             </div>
         </div>
@@ -125,11 +146,12 @@
 
     <script>
         // --- Variables Globales ---
-        let html5QrcodeScanner = null;
+        let html5QrCode = null; // Cambiado a la clase base en lugar de Scanner para mejor control
         let historialCodigos = [];
         const listaEl = document.getElementById('lista-codigos');
         const emptyStateEl = document.getElementById('empty-state');
         const beepSound = document.getElementById('beep-sound');
+        const errorEl = document.getElementById('error-message');
 
         // --- Inicialización ---
         document.addEventListener('DOMContentLoaded', () => {
@@ -236,42 +258,78 @@
                 btnEscaner.classList.remove('text-gray-400');
                 btnEscaner.classList.add('text-blue-600');
 
+                // Intentamos iniciar automáticamente, pero si falla el usuario tiene el botón
                 iniciarCamara();
             }
         }
 
-        // --- Lógica del Escáner (Html5Qrcode) ---
+        // --- Lógica del Escáner (Html5Qrcode Clase Base) ---
 
         function iniciarCamara() {
-            // Si ya existe una instancia, no crear otra
-            if (html5QrcodeScanner) return;
+            errorEl.classList.add('hidden');
+            
+            // Verificar si hay instancia previa
+            if (html5QrCode) {
+                // Si ya está escaneando, no hacer nada
+                if (html5QrCode.isScanning) return;
+            } else {
+                html5QrCode = new Html5Qrcode("reader");
+            }
 
-            // Configuración del escáner
-            const config = { 
-                fps: 10, 
-                qrbox: { width: 250, height: 250 },
-                aspectRatio: 1.0
-            };
+            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
             
-            // Crear instancia (usamos la versión Scanner que incluye UI básica para seleccionar cámara)
-            html5QrcodeScanner = new Html5QrcodeScanner("reader", config, /* verbose= */ false);
-            
-            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+            // Intentar iniciar la cámara trasera ("environment")
+            html5QrCode.start(
+                { facingMode: "environment" }, 
+                config, 
+                onScanSuccess, 
+                onScanFailure
+            ).then(() => {
+                // Éxito al iniciar
+                document.getElementById('btn-start-cam').classList.add('hidden');
+                document.getElementById('btn-stop-cam').classList.remove('hidden');
+            }).catch(err => {
+                // Error al iniciar
+                console.error("Error iniciando cámara", err);
+                document.getElementById('btn-start-cam').classList.remove('hidden');
+                document.getElementById('btn-stop-cam').classList.add('hidden');
+                
+                mostrarError(err);
+            });
         }
 
         function detenerCamara() {
-            if (html5QrcodeScanner) {
-                try {
-                    html5QrcodeScanner.clear().then(() => {
-                        html5QrcodeScanner = null;
-                        document.getElementById('reader').innerHTML = ""; // Limpiar el DOM
-                    }).catch(error => {
-                        console.error("Error al detener cámara", error);
-                    });
-                } catch (e) {
-                    console.log("Scanner no estaba corriendo");
-                }
+            if (html5QrCode && html5QrCode.isScanning) {
+                html5QrCode.stop().then(() => {
+                    document.getElementById('btn-start-cam').classList.remove('hidden');
+                    document.getElementById('btn-stop-cam').classList.add('hidden');
+                    document.getElementById('reader').innerHTML = `
+                        <div class="flex flex-col items-center justify-center text-gray-400 pt-10">
+                            <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
+                            <p class="text-sm px-4">Cámara detenida</p>
+                        </div>
+                    `;
+                }).catch(err => {
+                    console.error("Error al detener", err);
+                });
             }
+        }
+
+        function mostrarError(err) {
+            errorEl.classList.remove('hidden');
+            let msg = "No se pudo acceder a la cámara.";
+            
+            if (err.name === 'NotAllowedError') {
+                msg = "⚠️ Permiso denegado. Por favor, permite el acceso a la cámara en tu navegador.";
+            } else if (err.name === 'NotFoundError') {
+                msg = "⚠️ No se encontró ninguna cámara en este dispositivo.";
+            } else if (err.name === 'NotSupportedError' || location.protocol !== 'https:' && location.hostname !== 'localhost') {
+                msg = "⚠️ Error de seguridad: La cámara requiere HTTPS. Si estás probando localmente, usa 'localhost'.";
+            } else {
+                msg = `⚠️ Error: ${err}`;
+            }
+            
+            errorEl.innerHTML = `<strong>Error:</strong> ${msg}`;
         }
 
         function onScanSuccess(decodedText, decodedResult) {
@@ -286,22 +344,22 @@
             resultBox.classList.add('scan-success');
             textSpan.textContent = decodedText;
 
-            // Evitar duplicados inmediatos (opcional, aquí permitimos todo)
             // Agregar al registro
             let formato = decodedResult?.result?.format?.formatName || "DETECTADO";
             agregarCodigo(decodedText, formato);
 
-            // Pausar brevemente para evitar leer el mismo código 50 veces en un segundo
-            html5QrcodeScanner.pause(true);
-            setTimeout(() => {
-                html5QrcodeScanner.resume();
-                resultBox.classList.remove('scan-success');
-            }, 1500);
+            // Pausar brevemente para evitar leer el mismo código múltiples veces
+            if (html5QrCode) {
+                html5QrCode.pause();
+                setTimeout(() => {
+                    html5QrCode.resume();
+                    resultBox.classList.remove('scan-success');
+                }, 1500);
+            }
         }
 
         function onScanFailure(error) {
-            // Esto se ejecuta muy frecuentemente cuando no detecta nada,
-            // mejor no hacer nada aquí para no saturar la consola.
+            // Falla silenciosa durante el escaneo frame por frame
         }
 
     </script>
