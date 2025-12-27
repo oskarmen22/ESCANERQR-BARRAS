@@ -17,20 +17,60 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background-color: #f3f4f6;
             padding-bottom: 80px; /* Espacio para el menú inferior */
+            user-select: none; /* Evitar selección de texto al mantener pulsado */
+            -webkit-user-select: none;
         }
         
-        #reader {
+        #reader-container {
+            position: relative;
             width: 100%;
             min-height: 300px;
             border-radius: 12px;
             overflow: hidden;
-            background-color: #e5e7eb; /* Gris en lugar de negro para evitar confusión */
-            position: relative;
+            background-color: #e5e7eb;
+        }
+
+        #reader {
+            width: 100%;
+            height: 100%;
+            /* El video ocupará el fondo */
         }
         
         #reader video {
             object-fit: cover;
             border-radius: 12px;
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        /* Capa de control invisible sobre el video para detectar toques */
+        #scan-control-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            display: flex;
+            flex-col: column;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border: 4px solid transparent; /* Borde invisible por defecto */
+            transition: all 0.2s ease;
+            touch-action: none; /* Prevenir scroll mientras se presiona en móviles */
+        }
+
+        /* Estado cuando el usuario mantiene presionado */
+        #scan-control-layer.is-pressing {
+            border-color: #3b82f6; /* Azul al presionar */
+            background-color: rgba(0, 0, 0, 0.1);
+        }
+
+        /* Estado de éxito */
+        #scan-control-layer.scan-success {
+            border-color: #22c55e; /* Verde al éxito */
+            background-color: rgba(34, 197, 94, 0.2);
         }
 
         .scan-item {
@@ -39,16 +79,6 @@
         .scan-item:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        }
-
-        /* Animación de pulso cuando se escanea */
-        @keyframes scan-pulse {
-            0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
-        }
-        .scan-success {
-            animation: scan-pulse 0.5s;
         }
     </style>
 </head>
@@ -88,12 +118,26 @@
         <div id="view-escaner" class="hidden">
             <div class="bg-white p-4 rounded-xl shadow-md mb-4 text-center">
                 <h2 class="text-gray-700 font-bold mb-2">Escaneando...</h2>
-                <p class="text-sm text-gray-500 mb-4">Apunta la cámara al código QR o de Barras</p>
+                <p class="text-sm text-gray-500 mb-4">Mantén presionado el recuadro para escanear</p>
                 
-                <!-- Área de la cámara -->
-                <div id="reader" class="flex flex-col items-center justify-center text-gray-400">
-                    <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
-                    <p class="text-sm px-4">Cámara inactiva</p>
+                <!-- Área de la cámara con Overlay de Control -->
+                <div id="reader-container">
+                    <div id="reader" class="flex flex-col items-center justify-center text-gray-400">
+                        <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
+                        <p class="text-sm px-4">Cámara inactiva</p>
+                    </div>
+
+                    <!-- Botón de Flash (Flotante) -->
+                    <button id="btn-flash" onclick="toggleFlash()" class="absolute top-4 right-4 bg-black/50 text-white w-10 h-10 rounded-full hover:bg-black/70 hidden z-30 backdrop-blur-sm flex items-center justify-center transition-all">
+                        <i class="fa-solid fa-bolt text-lg"></i>
+                    </button>
+                    
+                    <!-- Capa transparente para detectar clicks/toques -->
+                    <div id="scan-control-layer" class="hidden">
+                        <div id="scan-instruction" class="bg-black/50 text-white px-4 py-2 rounded-full text-sm font-semibold backdrop-blur-sm pointer-events-none transition-opacity duration-200">
+                            <i class="fa-regular fa-hand-point-up mr-2"></i>Mantén presionado
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Botones de control manual -->
@@ -146,18 +190,87 @@
 
     <script>
         // --- Variables Globales ---
-        let html5QrCode = null; // Cambiado a la clase base en lugar de Scanner para mejor control
+        let html5QrCode = null;
         let historialCodigos = [];
+        
+        // Variables de control de escaneo manual
+        let isUserPressing = false;
+        let hasScannedThisPress = false;
+        let isFlashOn = false;
+
+        // Elementos DOM
         const listaEl = document.getElementById('lista-codigos');
         const emptyStateEl = document.getElementById('empty-state');
         const beepSound = document.getElementById('beep-sound');
         const errorEl = document.getElementById('error-message');
+        const controlLayer = document.getElementById('scan-control-layer');
+        const scanInstruction = document.getElementById('scan-instruction');
+        const flashBtn = document.getElementById('btn-flash');
 
         // --- Inicialización ---
         document.addEventListener('DOMContentLoaded', () => {
             cargarHistorial();
             renderizarHistorial();
+            setupTouchEvents(); // Configurar eventos de toque
         });
+
+        // --- Configuración de Eventos de Toque/Click ---
+        function setupTouchEvents() {
+            // Mouse
+            controlLayer.addEventListener('mousedown', startPress);
+            controlLayer.addEventListener('mouseup', endPress);
+            controlLayer.addEventListener('mouseleave', endPress);
+
+            // Touch (Móvil)
+            controlLayer.addEventListener('touchstart', (e) => {
+                e.preventDefault(); // Evitar comportamientos por defecto del navegador
+                startPress();
+            }, { passive: false });
+            
+            controlLayer.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                endPress();
+            });
+        }
+
+        function startPress() {
+            if (!html5QrCode) return; // Solo si la cámara está activa
+            
+            isUserPressing = true;
+            hasScannedThisPress = false; // Resetear el bloqueo de esta sesión de presión
+            
+            // Feedback Visual
+            controlLayer.classList.add('is-pressing');
+            controlLayer.classList.remove('scan-success'); // Quitar verde si estaba
+            scanInstruction.innerHTML = '<i class="fa-solid fa-bolt mr-2 text-yellow-300"></i>Escaneando...';
+            scanInstruction.classList.remove('bg-black/50');
+            scanInstruction.classList.add('bg-blue-600/80');
+        }
+
+        function endPress() {
+            isUserPressing = false;
+            
+            // Feedback Visual
+            controlLayer.classList.remove('is-pressing');
+            
+            // Si ya escaneó exitosamente, dejar el verde un momento, si no, volver a negro
+            if (!hasScannedThisPress) {
+                resetInstructionUI();
+            } else {
+                // Si hubo éxito, esperamos un poco antes de resetear la UI para que se vea el verde
+                setTimeout(resetInstructionUI, 1000);
+            }
+        }
+
+        function resetInstructionUI() {
+            if(!isUserPressing) { // Solo si el usuario no volvió a presionar
+                controlLayer.classList.remove('scan-success');
+                scanInstruction.innerHTML = '<i class="fa-regular fa-hand-point-up mr-2"></i>Mantén presionado';
+                scanInstruction.classList.add('bg-black/50');
+                scanInstruction.classList.remove('bg-blue-600/80');
+                scanInstruction.classList.remove('bg-green-600/80');
+            }
+        }
 
         // --- Lógica del Historial ---
         function cargarHistorial() {
@@ -181,7 +294,6 @@
                 fecha: fecha.toLocaleDateString() + ' ' + fecha.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             };
             
-            // Añadir al principio del array
             historialCodigos.unshift(nuevoItem);
             guardarHistorial();
         }
@@ -241,24 +353,21 @@
                 viewRegistro.classList.remove('hidden');
                 viewEscaner.classList.add('hidden');
                 
-                // Estilos botones
                 btnRegistro.classList.remove('text-gray-400');
                 btnRegistro.classList.add('text-blue-600');
                 btnEscaner.classList.add('text-gray-400');
                 btnEscaner.classList.remove('text-blue-600');
 
-                detenerCamara(); // Ahorrar batería
+                detenerCamara(); 
             } else {
                 viewRegistro.classList.add('hidden');
                 viewEscaner.classList.remove('hidden');
 
-                // Estilos botones
                 btnRegistro.classList.add('text-gray-400');
                 btnRegistro.classList.remove('text-blue-600');
                 btnEscaner.classList.remove('text-gray-400');
                 btnEscaner.classList.add('text-blue-600');
 
-                // Intentamos iniciar automáticamente, pero si falla el usuario tiene el botón
                 iniciarCamara();
             }
         }
@@ -268,37 +377,43 @@
         function iniciarCamara() {
             errorEl.classList.add('hidden');
             
-            // Verificar si hay instancia previa
             if (html5QrCode) {
-                // Si ya está escaneando, no hacer nada
                 if (html5QrCode.isScanning) return;
             } else {
                 html5QrCode = new Html5Qrcode("reader");
             }
 
-            const config = { fps: 10, qrbox: { width: 250, height: 250 } };
+            // QRBox más grande para facilitar lectura
+            const config = { fps: 15, qrbox: { width: 250, height: 250 } };
             
-            // Intentar iniciar la cámara trasera ("environment")
             html5QrCode.start(
                 { facingMode: "environment" }, 
                 config, 
                 onScanSuccess, 
                 onScanFailure
             ).then(() => {
-                // Éxito al iniciar
                 document.getElementById('btn-start-cam').classList.add('hidden');
                 document.getElementById('btn-stop-cam').classList.remove('hidden');
+                
+                // Mostrar la capa de control solo cuando la cámara arranca
+                controlLayer.classList.remove('hidden');
+                
+                // Verificar soporte de Flash
+                checkFlashCapability();
+
             }).catch(err => {
-                // Error al iniciar
                 console.error("Error iniciando cámara", err);
                 document.getElementById('btn-start-cam').classList.remove('hidden');
                 document.getElementById('btn-stop-cam').classList.add('hidden');
-                
                 mostrarError(err);
             });
         }
 
         function detenerCamara() {
+            controlLayer.classList.add('hidden'); // Ocultar capa de control
+            flashBtn.classList.add('hidden'); // Ocultar flash
+            resetFlashIcon(); // Resetear icono
+
             if (html5QrCode && html5QrCode.isScanning) {
                 html5QrCode.stop().then(() => {
                     document.getElementById('btn-start-cam').classList.remove('hidden');
@@ -313,6 +428,57 @@
                     console.error("Error al detener", err);
                 });
             }
+        }
+
+        // --- Lógica del Flash ---
+
+        function checkFlashCapability() {
+            try {
+                // Obtener capacidades de la cámara actual
+                const capabilities = html5QrCode.getRunningTrackCameraCapabilities();
+                
+                // Verificar si soporta 'torch' (linterna)
+                if (capabilities.torchFeature().isSupported()) {
+                    flashBtn.classList.remove('hidden');
+                } else {
+                    flashBtn.classList.add('hidden');
+                }
+            } catch (err) {
+                console.log("No se pudo verificar el soporte de flash (posiblemente no soportado o error de librería):", err);
+                flashBtn.classList.add('hidden');
+            }
+        }
+
+        function toggleFlash() {
+            if (!html5QrCode) return;
+
+            isFlashOn = !isFlashOn;
+
+            html5QrCode.applyVideoConstraints({
+                advanced: [{ torch: isFlashOn }]
+            }).then(() => {
+                updateFlashIcon();
+            }).catch(err => {
+                console.error("Error cambiando estado del flash:", err);
+                // Si falla, revertimos el estado
+                isFlashOn = !isFlashOn;
+                alert("No se pudo activar el flash en este dispositivo.");
+            });
+        }
+
+        function updateFlashIcon() {
+            if (isFlashOn) {
+                flashBtn.classList.remove('bg-black/50', 'text-white');
+                flashBtn.classList.add('bg-yellow-400', 'text-black', 'shadow-[0_0_15px_rgba(250,204,21,0.5)]');
+            } else {
+                resetFlashIcon();
+            }
+        }
+
+        function resetFlashIcon() {
+            isFlashOn = false; // Asegurar estado false logicamente
+            flashBtn.classList.add('bg-black/50', 'text-white');
+            flashBtn.classList.remove('bg-yellow-400', 'text-black', 'shadow-[0_0_15px_rgba(250,204,21,0.5)]');
         }
 
         function mostrarError(err) {
@@ -333,33 +499,40 @@
         }
 
         function onScanSuccess(decodedText, decodedResult) {
+            // LÓGICA CLAVE: 
+            // 1. Si el usuario NO está presionando, ignoramos el resultado.
+            // 2. Si YA escaneamos algo en esta misma pulsación, ignoramos el resultado.
+            
+            if (!isUserPressing) return; 
+            if (hasScannedThisPress) return;
+
+            // --- ÉXITO ---
+            hasScannedThisPress = true; // Bloquear futuros escaneos hasta soltar dedo
+
             // Reproducir sonido
             beepSound.play().catch(e => console.log("Audio play failed interaction needed"));
 
-            // Mostrar resultado en pantalla momentáneamente
+            // Feedback Visual de Éxito Inmediato
+            controlLayer.classList.add('scan-success');
+            controlLayer.classList.remove('is-pressing');
+            scanInstruction.innerHTML = '<i class="fa-solid fa-check mr-2"></i>¡Escaneado!';
+            scanInstruction.classList.remove('bg-blue-600/80');
+            scanInstruction.classList.add('bg-green-600/80');
+
+            // Mostrar resultado
             const resultBox = document.getElementById('last-result');
             const textSpan = document.getElementById('scanned-text');
             
             resultBox.classList.remove('hidden');
-            resultBox.classList.add('scan-success');
             textSpan.textContent = decodedText;
 
-            // Agregar al registro
+            // Guardar
             let formato = decodedResult?.result?.format?.formatName || "DETECTADO";
             agregarCodigo(decodedText, formato);
-
-            // Pausar brevemente para evitar leer el mismo código múltiples veces
-            if (html5QrCode) {
-                html5QrCode.pause();
-                setTimeout(() => {
-                    html5QrCode.resume();
-                    resultBox.classList.remove('scan-success');
-                }, 1500);
-            }
         }
 
         function onScanFailure(error) {
-            // Falla silenciosa durante el escaneo frame por frame
+            // Falla silenciosa
         }
 
     </script>
