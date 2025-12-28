@@ -128,6 +128,11 @@
                         <i class="fa-solid fa-camera-slash text-4xl mb-2"></i>
                         <p class="text-sm px-4">Iniciando cámara...</p>
                     </div>
+                    
+                    <!-- NUEVO: Temporizador Visual -->
+                    <div id="timer-badge" class="absolute top-4 left-4 bg-black/50 text-white px-3 py-1 rounded-full text-xs font-mono hidden z-30 backdrop-blur-sm transition-colors duration-200">
+                        <i class="fa-regular fa-clock mr-1"></i><span id="timer-count">30</span>s
+                    </div>
 
                     <!-- Botón de Flash (Flotante) -->
                     <button id="btn-flash" onclick="event.stopPropagation(); toggleFlash()" class="absolute top-4 right-4 bg-black/50 text-white w-10 h-10 rounded-full hover:bg-black/70 hidden z-30 backdrop-blur-sm flex items-center justify-center transition-all">
@@ -189,17 +194,22 @@
         let isCameraStarting = false;
 
         // Variables para temporizador de inactividad
-        let inactivityTimeout = null;
-        const INACTIVITY_LIMIT_MS = 30000; // 30 segundos
+        let inactivityInterval = null; // Cambiado de Timeout a Interval para la cuenta regresiva
+        let timeLeft = 30; // Segundos restantes
+        const INACTIVITY_LIMIT_SEC = 30;
 
         // Elementos DOM
         const listaEl = document.getElementById('lista-codigos');
         const emptyStateEl = document.getElementById('empty-state');
         const errorEl = document.getElementById('error-message');
-        const readerContainer = document.getElementById('reader-container'); // Contenedor principal
+        const readerContainer = document.getElementById('reader-container'); 
         const controlLayer = document.getElementById('scan-control-layer');
         const scanInstruction = document.getElementById('scan-instruction');
         const flashBtn = document.getElementById('btn-flash');
+        
+        // Elementos del temporizador
+        const timerBadge = document.getElementById('timer-badge');
+        const timerCount = document.getElementById('timer-count');
 
         // --- Inicialización ---
         document.addEventListener('DOMContentLoaded', () => {
@@ -233,8 +243,6 @@
         // --- Configuración de Eventos de Toque/Click ---
         function setupTouchEvents() {
             // AHORA AGREGAMOS LOS LISTENERS AL CONTENEDOR PRINCIPAL
-            // Esto asegura que capture eventos aunque la cámara esté apagada o controlLayer oculta.
-            
             // Mouse
             readerContainer.addEventListener('mousedown', startPress);
             readerContainer.addEventListener('mouseup', endPress);
@@ -256,18 +264,18 @@
             // Ignorar si se pulsó el botón de flash
             if (e && e.target.closest('#btn-flash')) return;
 
-            // PAUSAR RELOJ: Limpiamos el timeout existente
-            // Al presionar, detenemos la cuenta regresiva de apagado
-            if (inactivityTimeout) {
-                clearTimeout(inactivityTimeout);
-                inactivityTimeout = null;
+            // PAUSAR RELOJ: Limpiamos el intervalo existente
+            if (inactivityInterval) {
+                clearInterval(inactivityInterval);
+                inactivityInterval = null;
             }
+            // Feedback visual de pausa (amarillo)
+            timerBadge.classList.add('text-yellow-300');
 
             isUserPressing = true;
             hasScannedThisPress = false;
 
             // LÓGICA DE REACTIVACIÓN INMEDIATA:
-            // Si la cámara no está corriendo, la iniciamos PERO mantenemos el estado "presionado".
             if (!html5QrCode || !html5QrCode.isScanning) {
                 if (!isCameraStarting) {
                     iniciarCamara(); 
@@ -275,7 +283,6 @@
             }
 
             // FEEDBACK VISUAL INMEDIATO
-            // Mostramos la capa de control incluso si la cámara apenas está cargando
             controlLayer.classList.remove('hidden'); 
             controlLayer.classList.add('is-pressing');
             controlLayer.classList.remove('scan-success');
@@ -308,7 +315,6 @@
                 scanInstruction.classList.remove('bg-green-600/80');
                 
                 // Si la cámara está apagada y no estamos presionando, ocultamos la capa 
-                // para que se vea claro el mensaje de "Cámara Pausada"
                 if (!html5QrCode || (!html5QrCode.isScanning && !isCameraStarting)) {
                     controlLayer.classList.add('hidden');
                 }
@@ -404,13 +410,38 @@
         }
 
         // --- Gestión de Inactividad ---
+        function updateTimerDisplay() {
+            timerCount.textContent = timeLeft;
+            if (timeLeft <= 5) {
+                timerBadge.classList.add('text-red-400');
+            } else {
+                timerBadge.classList.remove('text-red-400');
+            }
+        }
+
         function resetInactivityTimer() {
-            if (inactivityTimeout) clearTimeout(inactivityTimeout);
+            // Limpiar intervalo anterior
+            if (inactivityInterval) clearInterval(inactivityInterval);
+            
+            // Solo iniciamos si la cámara está escaneando
             if (html5QrCode && html5QrCode.isScanning) {
-                inactivityTimeout = setTimeout(() => {
-                    console.log("Inactividad detectada. Apagando cámara.");
-                    detenerCamara(true);
-                }, INACTIVITY_LIMIT_MS);
+                timeLeft = INACTIVITY_LIMIT_SEC;
+                updateTimerDisplay();
+                
+                // Mostrar temporizador normal (sin pausa)
+                timerBadge.classList.remove('hidden');
+                timerBadge.classList.remove('text-yellow-300');
+
+                inactivityInterval = setInterval(() => {
+                    timeLeft--;
+                    updateTimerDisplay();
+                    
+                    if (timeLeft <= 0) {
+                        clearInterval(inactivityInterval);
+                        console.log("Inactividad detectada. Apagando cámara.");
+                        detenerCamara(true);
+                    }
+                }, 1000);
             }
         }
 
@@ -418,8 +449,6 @@
         function iniciarCamara() {
             if (isCameraStarting) return;
             if (html5QrCode && html5QrCode.isScanning) {
-                // Si ya está escaneando y NO estamos presionando, reseteamos el timer.
-                // Si estamos presionando, el timer debe estar en pausa (startPress lo borró).
                 if (!isUserPressing) resetInactivityTimer();
                 return;
             }
@@ -435,14 +464,16 @@
             .then(() => {
                 isCameraStarting = false;
                 
-                // Si el usuario seguía presionando mientras cargaba, nos aseguramos que la UI lo refleje
                 if (isUserPressing) {
                     controlLayer.classList.remove('hidden');
                     controlLayer.classList.add('is-pressing');
-                    // IMPORTANTE: NO iniciamos el timer aquí porque el usuario está presionando (reloj pausado)
+                    // Mostrar temporizador pausado
+                    timerBadge.classList.remove('hidden');
+                    timerBadge.classList.add('text-yellow-300');
+                    timeLeft = INACTIVITY_LIMIT_SEC;
+                    updateTimerDisplay();
                 } else {
                     controlLayer.classList.remove('hidden');
-                    // Iniciamos el timer solo si no está presionando
                     resetInactivityTimer();
                 }
                 
@@ -456,22 +487,20 @@
         }
 
         function detenerCamara(esPorInactividad = false) {
-            if (inactivityTimeout) {
-                clearTimeout(inactivityTimeout);
-                inactivityTimeout = null;
+            if (inactivityInterval) {
+                clearInterval(inactivityInterval);
+                inactivityInterval = null;
             }
 
-            // Ocultamos la capa de control normal para que se vea el mensaje de pausa
             controlLayer.classList.add('hidden'); 
             flashBtn.classList.add('hidden');
+            timerBadge.classList.add('hidden'); // Ocultar temporizador
             resetFlashIcon();
 
             if (html5QrCode && html5QrCode.isScanning) {
                 html5QrCode.stop().then(() => {
                     let mensaje = esPorInactividad ? "Cámara pausada por inactividad" : "Cámara detenida";
                     
-                    // El mensaje ahora es meramente informativo visualmente, 
-                    // la interactividad está en el 'reader-container'
                     document.getElementById('reader').innerHTML = `
                         <div class="flex flex-col items-center justify-center text-gray-400 pt-10 w-full h-full">
                             <i class="fa-solid fa-power-off text-4xl mb-2"></i>
@@ -534,9 +563,7 @@
 
         function onScanSuccess(decodedText, decodedResult) {
             // NO reseteamos/activamos el timer aquí, porque el usuario sigue presionando.
-            // El timer está pausado (null). Se activará en endPress.
-
-            // Si el usuario no está presionando, ignoramos
+            
             if (!isUserPressing) return; 
             if (hasScannedThisPress) return;
 
