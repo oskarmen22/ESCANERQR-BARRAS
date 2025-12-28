@@ -423,26 +423,36 @@
             // Limpiar intervalo anterior
             if (inactivityInterval) clearInterval(inactivityInterval);
             
-            // Solo iniciamos si la cámara está escaneando
-            if (html5QrCode && html5QrCode.isScanning) {
-                timeLeft = INACTIVITY_LIMIT_SEC;
+            // Segurad: solo iniciar si html5QrCode está instanciado.
+            // Eliminamos la comprobación estricta isScanning aquí porque en el arranque inicial 
+            // a veces falla la condición aunque esté iniciando.
+            if (!html5QrCode) return;
+
+            timeLeft = INACTIVITY_LIMIT_SEC;
+            updateTimerDisplay();
+            
+            // Mostrar temporizador normal (sin pausa)
+            timerBadge.classList.remove('hidden');
+            timerBadge.classList.remove('text-yellow-300');
+
+            inactivityInterval = setInterval(() => {
+                // Doble check dentro del intervalo (seguridad cada segundo)
+                if (!html5QrCode || !html5QrCode.isScanning) {
+                     // Si la cámara se detuvo por otra razón, paramos el reloj
+                     clearInterval(inactivityInterval);
+                     timerBadge.classList.add('hidden');
+                     return;
+                }
+
+                timeLeft--;
                 updateTimerDisplay();
                 
-                // Mostrar temporizador normal (sin pausa)
-                timerBadge.classList.remove('hidden');
-                timerBadge.classList.remove('text-yellow-300');
-
-                inactivityInterval = setInterval(() => {
-                    timeLeft--;
-                    updateTimerDisplay();
-                    
-                    if (timeLeft <= 0) {
-                        clearInterval(inactivityInterval);
-                        console.log("Inactividad detectada. Apagando cámara.");
-                        detenerCamara(true);
-                    }
-                }, 1000);
-            }
+                if (timeLeft <= 0) {
+                    clearInterval(inactivityInterval);
+                    console.log("Inactividad detectada. Apagando cámara.");
+                    detenerCamara(true);
+                }
+            }, 1000);
         }
 
         // --- Lógica del Escáner ---
@@ -474,6 +484,7 @@
                     updateTimerDisplay();
                 } else {
                     controlLayer.classList.remove('hidden');
+                    // Forzar el inicio del reloj incondicionalmente tras arranque exitoso
                     resetInactivityTimer();
                 }
                 
